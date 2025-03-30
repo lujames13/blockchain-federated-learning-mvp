@@ -1,0 +1,5 @@
+flwr==1.6.0
+torch==2.0.1
+torchvision==0.15.2
+web3==6.10.0
+numpy==1.24.3

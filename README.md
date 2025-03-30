@@ -19,8 +19,8 @@
 
 2. **安裝 Hardhat 相關依賴**
    ```bash
-   npm install
-   npm install --save-dev @nomicfoundation/hardhat-ignition-ethers
+   npm init -y
+   npm install --save-dev hardhat @nomicfoundation/hardhat-toolbox @nomicfoundation/hardhat-ignition @nomicfoundation/hardhat-ignition-ethers
    ```
 
 3. **安裝 Python 相關依賴**
@@ -44,8 +44,6 @@ blockchain-federated-learning-mvp/
 │   ├── server.py                   # Flower 伺服器
 │   ├── client.py                   # Flower 客戶端
 │   └── blockchain_connector.py     # 區塊鏈連接器
-├── test/                           # 測試
-│   └── FederatedLearning.test.js   # 合約測試
 ├── hardhat.config.js               # Hardhat 配置
 ├── requirements.txt                # Python 依賴
 └── README.md                       # 本文件
@@ -74,20 +72,20 @@ blockchain-federated-learning-mvp/
 
 ```bash
 # 獲取當前聯邦學習狀態
-npx hardhat run scripts/interact.js --func getStatus --network localhost
+npx hardhat run scripts/interact.js --network localhost --func=getStatus
 
 # 註冊新參與者
-npx hardhat run scripts/interact.js --func registerClient --clientId 1 --network localhost
+npx hardhat run scripts/interact.js --network localhost --func=registerClient --clientId=1
 
 # 開始新一輪訓練
-npx hardhat run scripts/interact.js --func startRound --roundId 1 --network localhost
+npx hardhat run scripts/interact.js --network localhost --func=startRound --roundId=1
 ```
 
 ## 執行聯邦學習
 
 1. **啟動 Flower 伺服器**
    ```bash
-   python fl/server.py --contract-address 0x5FbDB2315678afecb367f032d93F642f64180aa3
+   python fl/server.py --contract-address 0x5FbDB2315678afecb367f032d93F642f64180aa3 --round-id 1
    ```
 
 2. **啟動多個 Flower 客戶端**
@@ -128,12 +126,10 @@ import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
 
 export default buildModule("FederatedLearningModule", (m) => {
   // 部署 FederatedLearning 合約
-  const federatedLearning = m.contract("FederatedLearning", []);
+  const federatedLearning = m.contract("FederatedLearning");
   
   // 初始化合約
   m.call(federatedLearning, "initialize", []);
-  
-  // 其他初始設定
   
   return { federatedLearning };
 });
@@ -142,7 +138,6 @@ export default buildModule("FederatedLearningModule", (m) => {
 ### 互動腳本功能
 
 `scripts/interact.js` 提供多種合約互動功能，可以用來：
-
 - 獲取系統狀態
 - 管理參與者
 - 控制訓練輪次
