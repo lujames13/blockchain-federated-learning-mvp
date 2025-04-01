@@ -1,15 +1,16 @@
 """
 client.py
 
-Flower 聯邦學習客戶端實作，整合區塊鏈功能
+Flower 聯邦學習客戶端實作，整合區塊鏈功能 (適配 flwr==1.17)
 """
 
 import argparse
 import os
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import random
 import time
 import json
+from collections import OrderedDict
 
 import flwr as fl
 import numpy as np
@@ -20,18 +21,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, random_split
 from torchvision.datasets import MNIST
 from torchvision.transforms import Compose, Normalize, ToTensor
-from flwr.common import (
-    Code,
-    EvaluateIns, 
-    EvaluateRes, 
-    FitIns, 
-    FitRes, 
-    Parameters, 
-    Scalar,
-    ndarrays_to_parameters,
-    parameters_to_ndarrays
-)
-from collections import OrderedDict
+from flwr.common.typing import NDArrays, Config, Scalar
 
 from blockchain_connector import BlockchainConnector
 
@@ -144,6 +134,18 @@ def set_parameters(net, parameters: List[np.ndarray]):
     state_dict = OrderedDict({k: torch.Tensor(v) for k, v in params_dict})
     net.load_state_dict(state_dict, strict=True)
 
+# 計算模型參數的 SHA-256 哈希值
+def compute_model_hash(parameters: List[np.ndarray]) -> str:
+    """計算模型參數的哈希值"""
+    import hashlib
+    # 將所有參數合併為一個字節數組
+    all_params = b''
+    for param in parameters:
+        all_params += param.tobytes()
+    # 計算 SHA-256 哈希值
+    hash_obj = hashlib.sha256(all_params)
+    return hash_obj.hexdigest()
+
 # 自定義 Flower 客戶端，整合區塊鏈功能
 class BlockchainFlowerClient(fl.client.NumPyClient):
     """整合區塊鏈的 Flower 客戶端"""
@@ -155,9 +157,11 @@ class BlockchainFlowerClient(fl.client.NumPyClient):
         
         # 設置設備
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+        print(f"使用設備: {self.device}")
         
         # 載入數據
         self.trainloader, self.testloader = load_data(client_id)
+        print(f"已載入數據，訓練集大小: {len(self.trainloader.dataset)}，測試集大小: {len(self.testloader.dataset)}")
         
         # 初始化模型
         self.net = Net()
@@ -173,12 +177,20 @@ class BlockchainFlowerClient(fl.client.NumPyClient):
                 print(f"客戶端 {self.client_id} 已在區塊鏈上註冊")
             else:
                 print(f"客戶端 {self.client_id} 註冊失敗")
+                # 添加重試邏輯
+                for i in range(3):  # 最多重試 3 次
+                    print(f"重試註冊 ({i+1}/3)...")
+                    time.sleep(2)  # 等待 2 秒
+                    success = self.blockchain_connector.register_client()
+                    if success:
+                        print(f"客戶端 {self.client_id} 在重試後註冊成功")
+                        break
             return success
         except Exception as e:
             print(f"註冊客戶端時發生錯誤: {str(e)}")
             return False
     
-    def get_properties(self, config: Dict[str, Scalar]) -> Dict[str, Scalar]:
+    def get_properties(self, config: Config) -> Dict[str, Scalar]:
         """獲取客戶端屬性"""
         # 獲取客戶端在區塊鏈上的資訊
         try:
@@ -187,33 +199,59 @@ class BlockchainFlowerClient(fl.client.NumPyClient):
                 "client_id": str(self.client_id),
                 "registered_on_blockchain": True,
                 "status": client_info.get("status", 0),
-                "contribution_score": client_info.get("contributionScore", 0)
+                "contribution_score": client_info.get("contributionScore", 0),
+                "device": str(self.device)
+            }
+        except Exception as e:
+            print(f"獲取客戶端屬性時發生錯誤: {str(e)}")
+            return {
+                "client_id": str(self.client_id),
+                "registered_on_blockchain": False,
+                "device": str(self.device)
             }
     
-    def get_parameters(self, config):
+    def get_parameters(self, config: Config) -> NDArrays:
         """獲取模型參數"""
         return get_parameters(self.net)
     
-    def fit(self, parameters, config):
+    def fit(self, parameters: NDArrays, config: Config) -> Tuple[NDArrays, int, Dict[str, Scalar]]:
         """訓練模型"""
         # 載入全局模型參數
         set_parameters(self.net, parameters)
         
+        # 解析配置
+        local_epochs = int(config.get("local_epochs", config.get("epochs", 1)))
+        round_id = int(config.get("round", config.get("round_id", 1)))
+        
+        print(f"開始訓練 - 輪次 {round_id}，本地訓練輪次 {local_epochs}")
+        
         # 訓練模型
-        epochs = config.get("epochs", 1)
-        train(self.net, self.trainloader, epochs, self.device)
+        train(self.net, self.trainloader, local_epochs, self.device)
         
         # 獲取更新後的參數
         updated_parameters = get_parameters(self.net)
         
+        # 生成模型哈希值 (如果區塊鏈連接器不提供此功能)
+        model_hash = compute_model_hash(updated_parameters)
+        
         # 提交模型更新到區塊鏈
-        round_id = config.get("round_id", 1)
-        model_hash = self.blockchain_connector.submit_model_update(round_id, updated_parameters)
+        try:
+            blockchain_hash = self.blockchain_connector.submit_model_update(round_id, updated_parameters)
+            print(f"模型更新已提交到區塊鏈，哈希: {blockchain_hash}")
+            if blockchain_hash:
+                model_hash = blockchain_hash  # 使用區塊鏈返回的哈希
+        except Exception as e:
+            print(f"提交模型更新到區塊鏈時發生錯誤: {str(e)}")
+            print(f"繼續使用本地生成的模型哈希: {model_hash}")
         
         # 返回更新後的參數和統計數據
-        return updated_parameters, len(self.trainloader.dataset), {"model_hash": model_hash}
+        return updated_parameters, len(self.trainloader.dataset), {
+            "model_hash": model_hash,
+            "client_id": str(self.client_id),
+            "round_id": round_id
+        }
     
-    def evaluate(self, parameters, config):
+    def evaluate(self, parameters: NDArrays, config: Config) -> Tuple[float, int, Dict[str, Scalar]]:
         """評估模型"""
         # 載入參數
         set_parameters(self.net, parameters)
@@ -221,18 +259,27 @@ class BlockchainFlowerClient(fl.client.NumPyClient):
         # 評估模型
         loss, accuracy = test(self.net, self.testloader, self.device)
         
+        # 獲取輪次 ID
+        round_id = int(config.get("round", config.get("round_id", 1)))
+        
+        print(f"評估完成 - 輪次 {round_id}, 損失: {loss:.4f}, 準確率: {accuracy:.4f}")
+        
         # 返回評估結果
-        return float(loss), len(self.testloader.dataset), {"accuracy": float(accuracy)}
+        return float(loss), len(self.testloader.dataset), {
+            "accuracy": float(accuracy),
+            "client_id": str(self.client_id)
+        }
 
 
-def run_client(client_id: int, blockchain_connector: BlockchainConnector):
-    """執行 Flower 客戶端"""
+# 啟動客戶端
+def run_client(client_id: int, blockchain_connector: BlockchainConnector, server_address: str = "127.0.0.1:8080"):
+    """啟動 Flower 客戶端"""
     # 創建客戶端
     client = BlockchainFlowerClient(client_id, blockchain_connector)
     
-    # 啟動客戶端
+    # 直接啟動客戶端 (Flower 1.17 不再使用 NumPyClientWrapper)
     fl.client.start_numpy_client(
-        server_address="127.0.0.1:8080",
+        server_address=server_address,
         client=client
     )
 
@@ -242,8 +289,13 @@ if __name__ == "__main__":
     parser.add_argument("--client-id", type=int, required=True, help="客戶端 ID")
     parser.add_argument("--contract-address", type=str, required=True, help="智能合約地址")
     parser.add_argument("--node-url", type=str, default="http://127.0.0.1:8545", help="以太坊節點 URL")
+    parser.add_argument("--server-address", type=str, default="127.0.0.1:8080", help="Flower 服務器地址")
     
     args = parser.parse_args()
+    
+    # 輸出版本資訊
+    print(f"Flower 版本: {fl.__version__}")
+    print(f"PyTorch 版本: {torch.__version__}")
     
     # 創建區塊鏈連接器
     blockchain_connector = BlockchainConnector(
@@ -252,11 +304,5 @@ if __name__ == "__main__":
         node_url=args.node_url
     )
     
-    # 執行客戶端
-    run_client(args.client_id, blockchain_connector)
-        except Exception as e:
-            print(f"獲取客戶端屬性時發生錯誤: {str(e)}")
-            return {
-                "client_id": str(self.client_id),
-                "registered_on_blockchain": False
-            }
+    # 運行客戶端
+    run_client(args.client_id, blockchain_connector, args.server_address)

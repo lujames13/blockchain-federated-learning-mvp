@@ -22,9 +22,12 @@ module.exports = {
   },
   paths: {
     artifacts: "./artifacts",
-    ignition: {
-      deployments: "./ignition/deployments",
-      modules: "./ignition/modules"
-    }
+    cache: "./cache",
+    sources: "./contracts",
+    tests: "./test"
+  },
+  ignition: {
+    deployments: "./ignition/deployments",
+    modules: "./ignition/modules"
   }
 };

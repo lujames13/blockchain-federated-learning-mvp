@@ -14,7 +14,20 @@ import time
 
 from web3 import Web3
 import numpy as np
-from web3.middleware import geth_poa_middleware
+
+# 從 web3.middleware 導入可用的 PoA 中間件
+try:
+    from web3.middleware import ExtraDataToPOAMiddleware
+except ImportError:
+    print("警告: 無法導入 ExtraDataToPOAMiddleware")
+    ExtraDataToPOAMiddleware = None
+
+# 嘗試從簽名中間件導入
+try:
+    from web3.middleware import SignAndSendRawMiddlewareBuilder
+except ImportError:
+    print("警告: 無法導入 SignAndSendRawMiddlewareBuilder")
+    SignAndSendRawMiddlewareBuilder = None
 
 
 class BlockchainConnector:
@@ -43,8 +56,10 @@ class BlockchainConnector:
         
         # 連接到以太坊節點
         self.w3 = Web3(Web3.HTTPProvider(node_url))
-        # 增加 PoA 中間件支援 Hardhat
-        self.w3.middleware_onion.inject(geth_poa_middleware, layer=0)
+        
+        # 添加 PoA 中間件
+        if ExtraDataToPOAMiddleware:
+            self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         
         # 檢查連接
         if not self.w3.is_connected():
@@ -62,32 +77,136 @@ class BlockchainConnector:
         if contract_abi_path is None:
             # 嘗試從預設位置載入 ABI
             try:
-                # 尋找最新的部署資料夾
-                ignition_dir = Path(__file__).parent.parent / "ignition" / "deployments"
-                if ignition_dir.exists():
-                    deployment_folders = sorted([d for d in ignition_dir.iterdir() if d.is_dir()])
-                    if deployment_folders:
-                        latest_deployment = deployment_folders[-1]
-                        artifacts_path = latest_deployment / "artifacts.json"
-                        if artifacts_path.exists():
-                            with open(artifacts_path, "r") as file:
-                                artifacts = json.load(file)
-                                contract_abi = artifacts["contracts"]["FederatedLearning"]["abi"]
-                        else:
-                            raise FileNotFoundError(f"找不到 artifacts.json 檔案: {artifacts_path}")
-                    else:
-                        raise FileNotFoundError(f"找不到部署資料夾: {ignition_dir}")
+                # 嘗試從 artifacts 目錄直接載入
+                artifacts_path = Path(__file__).parent.parent / "artifacts" / "contracts" / "FederatedLearning.sol" / "FederatedLearning.json"
+                if artifacts_path.exists():
+                    print(f"從 artifacts 目錄載入 ABI: {artifacts_path}")
+                    with open(artifacts_path, "r") as file:
+                        artifact = json.load(file)
+                        contract_abi = artifact["abi"]
                 else:
-                    # 直接載入 Artifacts 檔案
-                    artifacts_path = Path(__file__).parent.parent / "artifacts" / "contracts" / "FederatedLearning.sol" / "FederatedLearning.json"
-                    if artifacts_path.exists():
-                        with open(artifacts_path, "r") as file:
-                            artifact = json.load(file)
-                            contract_abi = artifact["abi"]
+                    # 嘗試從 ignition 部署目錄載入
+                    ignition_dir = Path(__file__).parent.parent / "ignition" / "deployments"
+                    if ignition_dir.exists():
+                        # 尋找可能的部署目錄
+                        deployment_folders = []
+                        for folder in ignition_dir.iterdir():
+                            if folder.is_dir() and (folder.name.startswith("chain-") or folder.name.startswith("default")):
+                                deployment_folders.append(folder)
+                        
+                        if deployment_folders:
+                            # 嘗試所有可能的部署目錄
+                            for deploy_folder in deployment_folders:
+                                artifacts_path = deploy_folder / "artifacts.json"
+                                if artifacts_path.exists():
+                                    print(f"從 ignition 部署目錄載入 ABI: {artifacts_path}")
+                                    with open(artifacts_path, "r") as file:
+                                        artifacts = json.load(file)
+                                        contract_abi = artifacts["contracts"]["FederatedLearning"]["abi"]
+                                    break
+                            else:
+                                raise FileNotFoundError(f"在部署目錄中找不到 artifacts.json: {', '.join(str(f) for f in deployment_folders)}")
+                        else:
+                            raise FileNotFoundError(f"找不到部署資料夾: {ignition_dir}")
                     else:
-                        raise FileNotFoundError(f"找不到合約 ABI 檔案: {artifacts_path}")
+                        raise FileNotFoundError(f"找不到 artifacts 或 ignition 目錄")
             except Exception as e:
-                raise ValueError(f"無法載入合約 ABI: {str(e)}")
+                # 最後嘗試直接生成一個基本的 ABI
+                print(f"警告: 無法從檔案載入 ABI: {str(e)}")
+                print("嘗試使用硬編碼的合約 ABI...")
+                
+                # 手動定義合約 ABI（僅包含基本功能）
+                contract_abi = [
+                    {
+                        "inputs": [],
+                        "stateMutability": "nonpayable",
+                        "type": "constructor"
+                    },
+                    {
+                        "inputs": [],
+                        "name": "initialize",
+                        "outputs": [],
+                        "stateMutability": "nonpayable",
+                        "type": "function"
+                    },
+                    {
+                        "inputs": [{"internalType": "uint256", "name": "clientId", "type": "uint256"}],
+                        "name": "registerClient",
+                        "outputs": [],
+                        "stateMutability": "nonpayable",
+                        "type": "function"
+                    },
+                    {
+                        "inputs": [{"internalType": "uint256", "name": "roundId", "type": "uint256"}],
+                        "name": "startRound",
+                        "outputs": [],
+                        "stateMutability": "nonpayable",
+                        "type": "function"
+                    },
+                    {
+                        "inputs": [
+                            {"internalType": "uint256", "name": "clientId", "type": "uint256"},
+                            {"internalType": "uint256", "name": "roundId", "type": "uint256"},
+                            {"internalType": "string", "name": "modelUpdateHash", "type": "string"}
+                        ],
+                        "name": "submitModelUpdate",
+                        "outputs": [],
+                        "stateMutability": "nonpayable",
+                        "type": "function"
+                    },
+                    {
+                        "inputs": [
+                            {"internalType": "uint256", "name": "clientId", "type": "uint256"},
+                            {"internalType": "uint256", "name": "roundId", "type": "uint256"}
+                        ],
+                        "name": "acceptModelUpdate",
+                        "outputs": [],
+                        "stateMutability": "nonpayable",
+                        "type": "function"
+                    },
+                    {
+                        "inputs": [
+                            {"internalType": "uint256", "name": "roundId", "type": "uint256"},
+                            {"internalType": "string", "name": "globalModelHash", "type": "string"}
+                        ],
+                        "name": "updateGlobalModel",
+                        "outputs": [],
+                        "stateMutability": "nonpayable",
+                        "type": "function"
+                    },
+                    {
+                        "inputs": [{"internalType": "uint256", "name": "roundId", "type": "uint256"}],
+                        "name": "completeRound",
+                        "outputs": [],
+                        "stateMutability": "nonpayable",
+                        "type": "function"
+                    },
+                    {
+                        "inputs": [],
+                        "name": "getSystemStatus",
+                        "outputs": [
+                            {"internalType": "uint256", "name": "totalClients", "type": "uint256"},
+                            {"internalType": "uint256", "name": "totalRounds", "type": "uint256"},
+                            {"internalType": "uint256", "name": "currentRound", "type": "uint256"},
+                            {"internalType": "enum FederatedLearning.RoundStatus", "name": "currentRoundStatus", "type": "uint8"}
+                        ],
+                        "stateMutability": "view",
+                        "type": "function"
+                    },
+                    {
+                        "inputs": [{"internalType": "uint256", "name": "clientId", "type": "uint256"}],
+                        "name": "getClientInfo",
+                        "outputs": [
+                            {"internalType": "address", "name": "clientAddress", "type": "address"},
+                            {"internalType": "enum FederatedLearning.ClientStatus", "name": "status", "type": "uint8"},
+                            {"internalType": "uint256", "name": "contributionScore", "type": "uint256"},
+                            {"internalType": "uint256", "name": "lastUpdateTimestamp", "type": "uint256"},
+                            {"internalType": "bool", "name": "selectedForRound", "type": "bool"}
+                        ],
+                        "stateMutability": "view",
+                        "type": "function"
+                    }
+                ]
         else:
             # 使用指定的 ABI
             with open(contract_abi_path, "r") as file:

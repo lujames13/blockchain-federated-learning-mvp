@@ -1,9 +1,9 @@
-import { buildModule } from "@nomicfoundation/hardhat-ignition/modules";
+const { buildModule } = require("@nomicfoundation/hardhat-ignition/modules");
 
 /**
  * @dev Ignition module for deploying and initializing the FederatedLearning contract
  */
-export default buildModule("FederatedLearningModule", (m) => {
+module.exports = buildModule("FederatedLearningModule", (m) => {
   // Deploy FederatedLearning contract
   const federatedLearning = m.contract("FederatedLearning");
   
