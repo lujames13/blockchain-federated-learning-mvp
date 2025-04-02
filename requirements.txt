@@ -29,7 +29,7 @@ eth-utils==5.2.0
 eth_abi==5.2.0
 exceptiongroup @ file:///home/conda/feedstock_root/build_artifacts/exceptiongroup_1733208806608/work
 filelock @ file:///home/conda/feedstock_root/build_artifacts/filelock_1741969488311/work
-flwr==1.17.0
+flwr==1.16.0
 frozenlist @ file:///home/conda/feedstock_root/build_artifacts/frozenlist_1737645236190/work
 fsspec==2025.3.0
 grpcio==1.71.0
