@@ -150,11 +150,14 @@ def compute_model_hash(parameters: List[np.ndarray]) -> str:
 class BlockchainFlowerClient(fl.client.NumPyClient):
     """整合區塊鏈的 Flower 客戶端"""
     
-    def __init__(self, client_id: int, blockchain_connector: BlockchainConnector):
+    def __init__(self, client_id: int, blockchain_connector: BlockchainConnector, 
+                 is_malicious: bool = False, attack_type: str = None):
         """初始化客戶端"""
         self.client_id = client_id
         self.blockchain_connector = blockchain_connector
-        
+        self.is_malicious = is_malicious
+        self.attack_type = attack_type
+
         # 設置設備
         self.device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
         print(f"使用設備: {self.device}")
@@ -231,7 +234,25 @@ class BlockchainFlowerClient(fl.client.NumPyClient):
         # 獲取更新後的參數
         updated_parameters = get_parameters(self.net)
         
-        # 生成模型哈希值 (如果區塊鏈連接器不提供此功能)
+        # 如果是惡意客戶端，修改參數
+        if self.is_malicious:
+            if self.attack_type == "model_poisoning":
+                print(f"客戶端 {self.client_id} 執行模型污染攻擊")
+                # 對參數進行污染 (例如反轉或添加噪聲)
+                for i in range(len(updated_parameters)):
+                    # 可以選擇不同的攻擊方式:
+                    # 1. 參數反轉
+                    updated_parameters[i] = -updated_parameters[i]
+                    # 2. 添加大量噪聲
+                    # noise = np.random.normal(0, 2.0, updated_parameters[i].shape)
+                    # updated_parameters[i] += noise
+            
+            elif self.attack_type == "targeted_attack":
+                print(f"客戶端 {self.client_id} 執行目標攻擊")
+                # 執行目標攻擊 (例如讓模型對特定數字分類錯誤)
+                # 這需要更複雜的實現...
+        
+        # 生成模型哈希值
         model_hash = compute_model_hash(updated_parameters)
         
         # 提交模型更新到區塊鏈
@@ -248,7 +269,8 @@ class BlockchainFlowerClient(fl.client.NumPyClient):
         return updated_parameters, len(self.trainloader.dataset), {
             "model_hash": model_hash,
             "client_id": str(self.client_id),
-            "round_id": round_id
+            "round_id": round_id,
+            "is_malicious": self.is_malicious
         }
     
     def evaluate(self, parameters: NDArrays, config: Config) -> Tuple[float, int, Dict[str, Scalar]]:
@@ -272,17 +294,23 @@ class BlockchainFlowerClient(fl.client.NumPyClient):
 
 
 # 啟動客戶端
-def run_client(client_id: int, blockchain_connector: BlockchainConnector, server_address: str = "127.0.0.1:8080"):
+def run_client(client_id: int, blockchain_connector: BlockchainConnector, 
+            is_malicious: bool = False, attack_type: str = None,
+            server_address: str = "127.0.0.1:8080"):
     """啟動 Flower 客戶端"""
     # 創建客戶端
-    client = BlockchainFlowerClient(client_id, blockchain_connector)
+    client = BlockchainFlowerClient(
+        client_id, 
+        blockchain_connector,
+        is_malicious=is_malicious,
+        attack_type=attack_type
+    )
     
-    # 直接啟動客戶端 (Flower 1.17 不再使用 NumPyClientWrapper)
+    # 直接啟動客戶端
     fl.client.start_numpy_client(
         server_address=server_address,
         client=client
     )
-
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="啟動 Flower 聯邦學習客戶端，整合區塊鏈功能")
@@ -290,6 +318,9 @@ if __name__ == "__main__":
     parser.add_argument("--contract-address", type=str, required=True, help="智能合約地址")
     parser.add_argument("--node-url", type=str, default="http://127.0.0.1:8545", help="以太坊節點 URL")
     parser.add_argument("--server-address", type=str, default="127.0.0.1:8080", help="Flower 服務器地址")
+    parser.add_argument("--malicious", action="store_true", help="是否為惡意客戶端")
+    parser.add_argument("--attack-type", type=str, default="model_poisoning", 
+                      choices=["model_poisoning", "targeted_attack"], help="攻擊類型")
     
     args = parser.parse_args()
     
@@ -305,4 +336,11 @@ if __name__ == "__main__":
     )
     
     # 運行客戶端
-    run_client(args.client_id, blockchain_connector, args.server_address)
+    run_client(
+        args.client_id, 
+        blockchain_connector, 
+        is_malicious=args.malicious,
+        attack_type=args.attack_type,
+        server_address=args.server_address
+    )
+

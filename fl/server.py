@@ -38,6 +38,7 @@ class BlockchainFedAvg(FedAvg):
         self,
         blockchain_connector: BlockchainConnector,
         round_id: int,
+        num_rounds: int = 3,  # 添加此參數
         fraction_fit: float = 1.0,
         fraction_evaluate: float = 1.0,
         min_fit_clients: int = 2,
@@ -57,6 +58,7 @@ class BlockchainFedAvg(FedAvg):
         )
         self.blockchain_connector = blockchain_connector
         self.round_id = round_id
+        self.num_rounds = num_rounds  # 保存總輪次數
         self.client_updates = {}
         
         # 啟動新輪次
@@ -137,7 +139,7 @@ class BlockchainFedAvg(FedAvg):
         aggregated_loss, metrics = super().aggregate_evaluate(server_round, results, failures)
         
         # 最後一輪，處理區塊鏈相關操作
-        if server_round == self.num_rounds:
+        if server_round >= self.num_rounds:  # 使用 >= 而不是 == 增加健壯性
             print(f"完成區塊鏈輪次 {self.round_id}")
             
             # 完成輪次
@@ -183,6 +185,7 @@ def main(
     strategy = BlockchainFedAvg(
         blockchain_connector=blockchain_connector,
         round_id=round_id,
+        num_rounds=num_rounds,  # 傳入總輪次數
         fraction_fit=sample_fraction,
         fraction_evaluate=sample_fraction,
         min_fit_clients=min_clients,
